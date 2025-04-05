@@ -172,3 +172,238 @@
     (var-set total-verifications (+ (var-get total-verifications) u1))
 )
 
+
+
+(define-map BlacklistedDocuments
+    { document-id: (string-ascii 32) }
+    { 
+        reason: (string-ascii 100),
+        blacklist-date: uint
+    }
+)
+
+(define-public (blacklist-document 
+    (document-id (string-ascii 32))
+    (reason (string-ascii 100)))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (map-set BlacklistedDocuments
+            {document-id: document-id}
+            {
+                reason: reason,
+                blacklist-date: stacks-block-height
+            }
+        )
+        (ok true)
+    )
+)
+
+(define-map EmergencyContacts
+    { user-id: (string-ascii 32) }
+    {
+        contact-name: (string-ascii 50),
+        contact-relation: (string-ascii 20),
+        contact-number: (string-ascii 20)
+    }
+)
+
+(define-public (add-emergency-contact
+    (user-id (string-ascii 32))
+    (contact-name (string-ascii 50))
+    (contact-relation (string-ascii 20))
+    (contact-number (string-ascii 20)))
+    (begin
+        (map-set EmergencyContacts
+            {user-id: user-id}
+            {
+                contact-name: contact-name,
+                contact-relation: contact-relation,
+                contact-number: contact-number
+            }
+        )
+        (ok true)
+    )
+)
+
+
+(define-map VerificationHistory
+    { verification-id: (string-ascii 32) }
+    {
+        document-id: (string-ascii 32),
+        verified-by: principal,
+        verification-time: uint,
+        verification-location: (string-ascii 50)
+    }
+)
+
+(define-public (record-verification
+    (verification-id (string-ascii 32))
+    (document-id (string-ascii 32))
+    (verification-location (string-ascii 50)))
+    (begin
+        (map-set VerificationHistory
+            {verification-id: verification-id}
+            {
+                document-id: document-id,
+                verified-by: tx-sender,
+                verification-time: stacks-block-height,
+                verification-location: verification-location
+            }
+        )
+        (ok true)
+    )
+)
+
+(define-map InsurancePolicies
+    { policy-id: (string-ascii 32) }
+    {
+        holder-id: (string-ascii 32),
+        coverage-type: (string-ascii 20),
+        start-date: uint,
+        end-date: uint,
+        coverage-amount: uint
+    }
+)
+
+(define-public (register-insurance-policy
+    (policy-id (string-ascii 32))
+    (holder-id (string-ascii 32))
+    (coverage-type (string-ascii 20))
+    (start-date uint)
+    (end-date uint)
+    (coverage-amount uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (map-set InsurancePolicies
+            {policy-id: policy-id}
+            {
+                holder-id: holder-id,
+                coverage-type: coverage-type,
+                start-date: start-date,
+                end-date: end-date,
+                coverage-amount: coverage-amount
+            }
+        )
+        (ok true)
+    )
+)
+
+(define-map DocumentTranslations
+    { 
+        document-id: (string-ascii 32),
+        language: (string-ascii 10)
+    }
+    {
+        translated-content: (string-ascii 500)
+    }
+)
+
+(define-public (add-translation
+    (document-id (string-ascii 32))
+    (language (string-ascii 10))
+    (translated-content (string-ascii 500)))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (map-set DocumentTranslations
+            {
+                document-id: document-id,
+                language: language
+            }
+            {
+                translated-content: translated-content
+            }
+        )
+        (ok true)
+    )
+)
+
+
+(define-map RenewalReminders
+    { document-id: (string-ascii 32) }
+    {
+        reminder-date: uint,
+        reminder-sent: bool,
+        reminder-type: (string-ascii 20)
+    }
+)
+
+(define-public (set-renewal-reminder
+    (document-id (string-ascii 32))
+    (reminder-date uint)
+    (reminder-type (string-ascii 20)))
+    (begin
+        (map-set RenewalReminders
+            {document-id: document-id}
+            {
+                reminder-date: reminder-date,
+                reminder-sent: false,
+                reminder-type: reminder-type
+            }
+        )
+        (ok true)
+    )
+)
+
+(define-map TravelRestrictions
+    { country: (string-ascii 30) }
+    {
+        restriction-level: uint,
+        requirements: (string-ascii 200),
+        last-updated: uint
+    }
+)
+
+(define-public (update-travel-restrictions
+    (country (string-ascii 30))
+    (restriction-level uint)
+    (requirements (string-ascii 200)))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (map-set TravelRestrictions
+            {country: country}
+            {
+                restriction-level: restriction-level,
+                requirements: requirements,
+                last-updated: stacks-block-height
+            }
+        )
+        (ok true)
+    )
+)
+
+(define-map VerifierRatings
+    { verifier: principal }
+    {
+        total-ratings: uint,
+        average-score: uint,
+        review-count: uint
+    }
+)
+
+(define-public (submit-verification-rating
+    (verifier principal)
+    (rating uint))
+    (begin
+        (asserts! (<= rating u5) (err u105))
+        (match (map-get? VerifierRatings {verifier: verifier})
+            existing-rating (map-set VerifierRatings
+                {verifier: verifier}
+                {
+                    total-ratings: (+ (get total-ratings existing-rating) rating),
+                    average-score: (/ (+ (get total-ratings existing-rating) rating) 
+                                    (+ (get review-count existing-rating) u1)),
+                    review-count: (+ (get review-count existing-rating) u1)
+                }
+            )
+            (map-set VerifierRatings
+                {verifier: verifier}
+                {
+                    total-ratings: rating,
+                    average-score: rating,
+                    review-count: u1
+                }
+            )
+        )
+        (ok true)
+    )
+)
