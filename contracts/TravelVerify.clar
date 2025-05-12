@@ -407,3 +407,113 @@
         (ok true)
     )
 )
+
+
+(define-map DelegatedVerifiers
+    { verifier: principal }
+    {
+        delegation-date: uint,
+        access-level: uint,
+        is-active: bool
+    }
+)
+
+(define-constant LEVEL-STANDARD u1)
+(define-constant LEVEL-ADVANCED u2)
+(define-constant LEVEL-ADMIN u3)
+
+(define-public (delegate-verifier 
+    (verifier principal)
+    (access-level uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (asserts! (or (is-eq access-level LEVEL-STANDARD) 
+                     (is-eq access-level LEVEL-ADVANCED)
+                     (is-eq access-level LEVEL-ADMIN)) 
+                 (err u106))
+        (map-set DelegatedVerifiers
+            {verifier: verifier}
+            {
+                delegation-date: stacks-block-height,
+                access-level: access-level,
+                is-active: true
+            }
+        )
+        (ok true)
+    )
+)
+
+(define-public (revoke-verifier (verifier principal))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (map-set DelegatedVerifiers
+            {verifier: verifier}
+            {
+                delegation-date: (get delegation-date (unwrap! (map-get? DelegatedVerifiers {verifier: verifier}) err-not-found)),
+                access-level: (get access-level (unwrap! (map-get? DelegatedVerifiers {verifier: verifier}) err-not-found)),
+                is-active: false
+            }
+        )
+        (ok true)
+    )
+)
+
+
+(define-map DocumentBundles
+    { bundle-id: (string-ascii 32) }
+    {
+        primary-document: (string-ascii 32),
+        related-documents: (list 5 (string-ascii 32)),
+        creation-date: uint,
+        last-verified: uint,
+        bundle-status: (string-ascii 10)
+    }
+)
+
+(define-public (create-document-bundle
+    (bundle-id (string-ascii 32))
+    (primary-document (string-ascii 32))
+    (related-documents (list 5 (string-ascii 32))))
+    (begin
+        (asserts! (is-none (map-get? DocumentBundles {bundle-id: bundle-id})) err-already-exists)
+        (asserts! (is-some (map-get? TravelDocuments {document-id: primary-document})) err-not-found)
+        (map-set DocumentBundles
+            {bundle-id: bundle-id}
+            {
+                primary-document: primary-document,
+                related-documents: related-documents,
+                creation-date: stacks-block-height,
+                last-verified: u0,
+                bundle-status: "ACTIVE"
+            }
+        )
+        (ok true)
+    )
+)
+
+(define-read-only (get-bundle-details (bundle-id (string-ascii 32)))
+    (match (map-get? DocumentBundles {bundle-id: bundle-id})
+        bundle (ok bundle)
+        err-not-found
+    )
+)
+
+
+(define-public (update-bundle-status
+    (bundle-id (string-ascii 32))
+    (new-status (string-ascii 10)))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (map-set DocumentBundles
+            {bundle-id: bundle-id}
+            {
+                primary-document: (get primary-document (unwrap! (map-get? DocumentBundles {bundle-id: bundle-id}) err-not-found)),
+                related-documents: (get related-documents (unwrap! (map-get? DocumentBundles {bundle-id: bundle-id}) err-not-found)),
+                creation-date: (get creation-date (unwrap! (map-get? DocumentBundles {bundle-id: bundle-id}) err-not-found)),
+                last-verified: stacks-block-height,
+                bundle-status: new-status
+            }
+        )
+        (ok true)
+    )
+)
