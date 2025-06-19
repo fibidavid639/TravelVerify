@@ -517,3 +517,188 @@
         (ok true)
     )
 )
+
+(define-map ExpiryMonitoring
+    { document-id: (string-ascii 32) }
+    {
+        expiry-score: uint,
+        warning-level: uint,
+        last-checked: uint,
+        notification-sent: bool
+    }
+)
+
+(define-map ExpiryNotifications
+    { notification-id: (string-ascii 32) }
+    {
+        document-id: (string-ascii 32),
+        holder-id: (string-ascii 32),
+        notification-type: (string-ascii 20),
+        created-date: uint,
+        is-acknowledged: bool
+    }
+)
+
+(define-data-var expiry-warning-threshold uint u30)
+(define-data-var expiry-critical-threshold uint u7)
+(define-data-var total-notifications uint u0)
+
+(define-constant WARNING-LEVEL-SAFE u0)
+(define-constant WARNING-LEVEL-CAUTION u1)
+(define-constant WARNING-LEVEL-WARNING u2)
+(define-constant WARNING-LEVEL-CRITICAL u3)
+
+(define-public (calculate-expiry-score (document-id (string-ascii 32)))
+    (let (
+        (document-data (unwrap! (map-get? TravelDocuments {document-id: document-id}) err-not-found))
+        (expiry-date (get expiry-date document-data))
+        (current-block stacks-block-height)
+        (days-until-expiry (if (> expiry-date current-block) (- expiry-date current-block) u0))
+        (warning-level (get-warning-level days-until-expiry))
+    )
+    (map-set ExpiryMonitoring
+        {document-id: document-id}
+        {
+            expiry-score: days-until-expiry,
+            warning-level: warning-level,
+            last-checked: current-block,
+            notification-sent: false
+        }
+    )
+    (ok days-until-expiry)
+    )
+)
+
+(define-private (get-warning-level (days-remaining uint))
+    (if (<= days-remaining (var-get expiry-critical-threshold))
+        WARNING-LEVEL-CRITICAL
+        (if (<= days-remaining (var-get expiry-warning-threshold))
+            WARNING-LEVEL-WARNING
+            (if (<= days-remaining u60)
+                WARNING-LEVEL-CAUTION
+                WARNING-LEVEL-SAFE
+            )
+        )
+    )
+)
+
+(define-public (create-expiry-notification 
+    (notification-id (string-ascii 32))
+    (document-id (string-ascii 32))
+    (holder-id (string-ascii 32))
+    (notification-type (string-ascii 20)))
+    (begin
+        (asserts! (is-some (map-get? TravelDocuments {document-id: document-id})) err-not-found)
+        (map-set ExpiryNotifications
+            {notification-id: notification-id}
+            {
+                document-id: document-id,
+                holder-id: holder-id,
+                notification-type: notification-type,
+                created-date: stacks-block-height,
+                is-acknowledged: false
+            }
+        )
+        (var-set total-notifications (+ (var-get total-notifications) u1))
+        (ok true)
+    )
+)
+
+(define-public (acknowledge-notification (notification-id (string-ascii 32)))
+    (let (
+        (notification-data (unwrap! (map-get? ExpiryNotifications {notification-id: notification-id}) err-not-found))
+    )
+    (map-set ExpiryNotifications
+        {notification-id: notification-id}
+        {
+            document-id: (get document-id notification-data),
+            holder-id: (get holder-id notification-data),
+            notification-type: (get notification-type notification-data),
+            created-date: (get created-date notification-data),
+            is-acknowledged: true
+        }
+    )
+    (ok true)
+    )
+)
+
+(define-public (batch-check-expiry (document-ids (list 10 (string-ascii 32))))
+    (let (
+        (results (map calculate-expiry-score-internal document-ids))
+    )
+    (ok results)
+    )
+)
+
+(define-private (calculate-expiry-score-internal (document-id (string-ascii 32)))
+    (match (map-get? TravelDocuments {document-id: document-id})
+        document-data 
+        (let (
+            (expiry-date (get expiry-date document-data))
+            (current-block stacks-block-height)
+            (days-until-expiry (if (> expiry-date current-block) (- expiry-date current-block) u0))
+            (warning-level (get-warning-level days-until-expiry))
+        )
+        (map-set ExpiryMonitoring
+            {document-id: document-id}
+            {
+                expiry-score: days-until-expiry,
+                warning-level: warning-level,
+                last-checked: current-block,
+                notification-sent: false
+            }
+        )
+        {document-id: document-id, expiry-score: days-until-expiry, warning-level: warning-level}
+        )
+        {document-id: document-id, expiry-score: u0, warning-level: u999}
+    )
+)
+
+(define-public (update-expiry-thresholds (warning-threshold uint) (critical-threshold uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+        (asserts! (> warning-threshold critical-threshold) (err u107))
+        (var-set expiry-warning-threshold warning-threshold)
+        (var-set expiry-critical-threshold critical-threshold)
+        (ok true)
+    )
+)
+
+(define-read-only (get-expiry-status (document-id (string-ascii 32)))
+    (match (map-get? ExpiryMonitoring {document-id: document-id})
+        monitoring-data (ok monitoring-data)
+        err-not-found
+    )
+)
+
+(define-read-only (get-notification-details (notification-id (string-ascii 32)))
+    (match (map-get? ExpiryNotifications {notification-id: notification-id})
+        notification-data (ok notification-data)
+        err-not-found
+    )
+)
+
+(define-read-only (get-expiry-thresholds)
+    (ok {
+        warning-threshold: (var-get expiry-warning-threshold),
+        critical-threshold: (var-get expiry-critical-threshold),
+        total-notifications: (var-get total-notifications)
+    })
+)
+
+(define-public (mark-notification-sent (document-id (string-ascii 32)))
+    (let (
+        (monitoring-data (unwrap! (map-get? ExpiryMonitoring {document-id: document-id}) err-not-found))
+    )
+    (map-set ExpiryMonitoring
+        {document-id: document-id}
+        {
+            expiry-score: (get expiry-score monitoring-data),
+            warning-level: (get warning-level monitoring-data),
+            last-checked: (get last-checked monitoring-data),
+            notification-sent: true
+        }
+    )
+    (ok true)
+    )
+)
