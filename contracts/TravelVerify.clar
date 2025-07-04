@@ -847,3 +847,128 @@
 (define-read-only (get-total-shares)
     (ok (var-get total-shares))
 )
+
+(define-map ComplianceChecks
+    { check-id: (string-ascii 32) }
+    {
+        traveler-id: (string-ascii 32),
+        destination-country: (string-ascii 30),
+        check-date: uint,
+        compliance-score: uint,
+        missing-requirements: (list 5 (string-ascii 50)),
+        status: (string-ascii 20)
+    }
+)
+
+(define-data-var total-compliance-checks uint u0)
+
+(define-public (perform-compliance-check
+    (check-id (string-ascii 32))
+    (traveler-id (string-ascii 32))
+    (destination-country (string-ascii 30))
+    (passport-id (string-ascii 32))
+    (visa-id (string-ascii 32))
+    (health-cert-id (string-ascii 32)))
+    (let (
+        (passport-valid (is-some (map-get? TravelDocuments {document-id: passport-id})))
+        (visa-valid (is-some (map-get? VisaRecords {visa-id: visa-id})))
+        (health-cert-valid (is-some (map-get? HealthCertificates {certificate-id: health-cert-id})))
+        (restrictions (map-get? TravelRestrictions {country: destination-country}))
+        (score (calculate-compliance-score passport-valid visa-valid health-cert-valid restrictions))
+        (missing-reqs (get-missing-requirements passport-valid visa-valid health-cert-valid))
+        (overall-status (if (>= score u80) "COMPLIANT" "NON-COMPLIANT"))
+    )
+    (map-set ComplianceChecks
+        {check-id: check-id}
+        {
+            traveler-id: traveler-id,
+            destination-country: destination-country,
+            check-date: stacks-block-height,
+            compliance-score: score,
+            missing-requirements: missing-reqs,
+            status: overall-status
+        }
+    )
+    (var-set total-compliance-checks (+ (var-get total-compliance-checks) u1))
+    (ok {
+        compliance-score: score,
+        status: overall-status,
+        missing-requirements: missing-reqs
+    })
+    )
+)
+
+(define-private (calculate-compliance-score (passport-valid bool) (visa-valid bool) (health-cert-valid bool) (restrictions (optional {restriction-level: uint, requirements: (string-ascii 200), last-updated: uint})))
+    (let (
+        (passport-score (if passport-valid u30 u0))
+        (visa-score (if visa-valid u30 u0))
+        (health-score (if health-cert-valid u25 u0))
+        (restriction-score (match restrictions
+            restr (if (<= (get restriction-level restr) u2) u15 u0)
+            u15
+        ))
+    )
+    (+ passport-score visa-score health-score restriction-score)
+    )
+)
+
+(define-private (get-missing-requirements (passport-valid bool) (visa-valid bool) (health-cert-valid bool))
+    (let (
+        (missing-passport (if passport-valid (list) (list "Valid Passport Required")))
+        (missing-visa (if visa-valid (list) (list "Valid Visa Required")))
+        (missing-health (if health-cert-valid (list) (list "Health Certificate Required")))
+    )
+    (concat missing-passport (concat missing-visa missing-health))
+    )
+)
+
+(define-read-only (get-compliance-check (check-id (string-ascii 32)))
+    (match (map-get? ComplianceChecks {check-id: check-id})
+        compliance-data (ok compliance-data)
+        err-not-found
+    )
+)
+
+(define-read-only (check-travel-eligibility
+    (destination-country (string-ascii 30))
+    (passport-id (string-ascii 32))
+    (visa-id (string-ascii 32))
+    (health-cert-id (string-ascii 32)))
+    (let (
+        (passport-data (map-get? TravelDocuments {document-id: passport-id}))
+        (visa-data (map-get? VisaRecords {visa-id: visa-id}))
+        (health-data (map-get? HealthCertificates {certificate-id: health-cert-id}))
+        (restrictions (map-get? TravelRestrictions {country: destination-country}))
+        (passport-expired (match passport-data
+            doc (< (get expiry-date doc) stacks-block-height)
+            true
+        ))
+        (visa-expired (match visa-data
+            visa (< (get expiry-date visa) stacks-block-height)
+            true
+        ))
+        (health-expired (match health-data
+            cert (< (+ (get test-date cert) (get validity-period cert)) stacks-block-height)
+            true
+        ))
+        (eligibility-score (if (and (not passport-expired) (not visa-expired) (not health-expired)) u100 u0))
+    )
+    (ok {
+        eligible: (is-eq eligibility-score u100),
+        passport-status: (if passport-expired "EXPIRED" "VALID"),
+        visa-status: (if visa-expired "EXPIRED" "VALID"),
+        health-cert-status: (if health-expired "EXPIRED" "VALID"),
+        restriction-level: (match restrictions
+            restr (get restriction-level restr)
+            u0
+        )
+    })
+    )
+)
+
+(define-read-only (get-compliance-statistics)
+    (ok {
+        total-checks: (var-get total-compliance-checks),
+        service-active: (var-get service-active)
+    })
+)
