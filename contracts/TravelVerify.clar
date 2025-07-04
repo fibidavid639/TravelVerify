@@ -702,3 +702,148 @@
     (ok true)
     )
 )
+
+(define-constant err-share-expired (err u108))
+(define-constant err-unauthorized-access (err u109))
+(define-constant err-share-not-found (err u110))
+
+(define-map DocumentShares
+    { share-id: (string-ascii 32) }
+    {
+        document-id: (string-ascii 32),
+        shared-by: principal,
+        shared-with: principal,
+        share-type: (string-ascii 20),
+        expiry-block: uint,
+        access-count: uint,
+        max-access: uint,
+        is-active: bool
+    }
+)
+
+(define-map ShareAccessLog
+    { access-id: (string-ascii 32) }
+    {
+        share-id: (string-ascii 32),
+        accessed-by: principal,
+        access-time: uint,
+        access-granted: bool
+    }
+)
+
+(define-data-var total-shares uint u0)
+
+(define-public (create-document-share
+    (share-id (string-ascii 32))
+    (document-id (string-ascii 32))
+    (shared-with principal)
+    (share-type (string-ascii 20))
+    (expiry-blocks uint)
+    (max-access uint))
+    (begin
+        (asserts! (is-some (map-get? TravelDocuments {document-id: document-id})) err-not-found)
+        (asserts! (is-none (map-get? DocumentShares {share-id: share-id})) err-already-exists)
+        (map-set DocumentShares
+            {share-id: share-id}
+            {
+                document-id: document-id,
+                shared-by: tx-sender,
+                shared-with: shared-with,
+                share-type: share-type,
+                expiry-block: (+ stacks-block-height expiry-blocks),
+                access-count: u0,
+                max-access: max-access,
+                is-active: true
+            }
+        )
+        (var-set total-shares (+ (var-get total-shares) u1))
+        (ok true)
+    )
+)
+
+(define-public (access-shared-document 
+    (share-id (string-ascii 32))
+    (access-id (string-ascii 32)))
+    (let (
+        (share-data (unwrap! (map-get? DocumentShares {share-id: share-id}) err-share-not-found))
+        (current-block stacks-block-height)
+        (access-granted (and 
+            (get is-active share-data)
+            (< current-block (get expiry-block share-data))
+            (< (get access-count share-data) (get max-access share-data))
+            (is-eq tx-sender (get shared-with share-data))
+        ))
+    )
+    (map-set ShareAccessLog
+        {access-id: access-id}
+        {
+            share-id: share-id,
+            accessed-by: tx-sender,
+            access-time: current-block,
+            access-granted: access-granted
+        }
+    )
+    (if access-granted
+        (begin
+            (map-set DocumentShares
+                {share-id: share-id}
+                {
+                    document-id: (get document-id share-data),
+                    shared-by: (get shared-by share-data),
+                    shared-with: (get shared-with share-data),
+                    share-type: (get share-type share-data),
+                    expiry-block: (get expiry-block share-data),
+                    access-count: (+ (get access-count share-data) u1),
+                    max-access: (get max-access share-data),
+                    is-active: (get is-active share-data)
+                }
+            )
+            (ok (map-get? TravelDocuments {document-id: (get document-id share-data)}))
+        )
+        (if (>= current-block (get expiry-block share-data))
+            err-share-expired
+            err-unauthorized-access
+        )
+    )
+    )
+)
+
+(define-public (revoke-document-share (share-id (string-ascii 32)))
+    (let (
+        (share-data (unwrap! (map-get? DocumentShares {share-id: share-id}) err-share-not-found))
+    )
+    (asserts! (is-eq tx-sender (get shared-by share-data)) err-unauthorized-access)
+    (map-set DocumentShares
+        {share-id: share-id}
+        {
+            document-id: (get document-id share-data),
+            shared-by: (get shared-by share-data),
+            shared-with: (get shared-with share-data),
+            share-type: (get share-type share-data),
+            expiry-block: (get expiry-block share-data),
+            access-count: (get access-count share-data),
+            max-access: (get max-access share-data),
+            is-active: false
+        }
+    )
+    (ok true)
+    )
+)
+
+(define-read-only (get-share-details (share-id (string-ascii 32)))
+    (match (map-get? DocumentShares {share-id: share-id})
+        share-data (ok share-data)
+        err-share-not-found
+    )
+)
+
+(define-read-only (get-access-log (access-id (string-ascii 32)))
+    (match (map-get? ShareAccessLog {access-id: access-id})
+        access-data (ok access-data)
+        err-not-found
+    )
+)
+
+(define-read-only (get-total-shares)
+    (ok (var-get total-shares))
+)
